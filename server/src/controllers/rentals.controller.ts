@@ -1,0 +1,130 @@
+import { Request, Response } from "express";
+import db from "@/db";
+import { LongTermRentsModel, OneTimeRentModel, UserModel } from "@/db/schema";
+import { desc, eq } from "drizzle-orm";
+import { z } from "zod";
+
+// ─────────────────────────────────────────────
+// GET /api/rentals/numbers
+// Current user এর সব LTR + OTR rentals
+// ─────────────────────────────────────────────
+export async function getMyNumberRentals(req: Request, res: Response) {
+  try {
+    const payload = req.payload!;
+    const { page, limit, type } = z.object({
+      page:  z.coerce.number().int().min(1).catch(1),
+      limit: z.coerce.number().int().min(1).max(100).catch(20),
+      type:  z.enum(["ltr", "otr", "all"]).catch("all"),
+    }).parse(req.query);
+
+    const offset = (page - 1) * limit;
+
+    const [ltrRentals, otrRentals] = await Promise.all([
+      type !== "otr"
+        ? db.query.LongTermRentsModel.findMany({
+            where: (m, { eq }) => eq(m.userId, payload.id),
+            orderBy: [desc(LongTermRentsModel.createdAt)],
+          })
+        : [],
+      type !== "ltr"
+        ? db.query.OneTimeRentModel.findMany({
+            where: (m, { eq }) => eq(m.userId, payload.id),
+            orderBy: [desc(OneTimeRentModel.createdAt)],
+          })
+        : [],
+    ]);
+
+    // Merge করে type label দিয়ে sort
+    const merged = [
+      ...ltrRentals.map((r) => ({ ...r, rentKind: "ltr" as const })),
+      ...otrRentals.map((r) => ({ ...r, rentKind: "otr" as const })),
+    ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const total = merged.length;
+    const paginated = merged.slice(offset, offset + limit);
+
+    res.json({
+      success: true,
+      rentals: paginated,
+      total,
+      totalPage: Math.ceil(total / limit),
+    });
+  } catch {
+    res.status(500).json({ success: false, message: "Internal server error." });
+  }
+}
+
+// ─────────────────────────────────────────────
+// GET /api/admin/rentals/numbers
+// Admin — সব users এর LTR + OTR rentals
+// ─────────────────────────────────────────────
+export async function getAllNumberRentals(req: Request, res: Response) {
+  try {
+    const { page, limit, type, userId } = z.object({
+      page:   z.coerce.number().int().min(1).catch(1),
+      limit:  z.coerce.number().int().min(1).max(100).catch(20),
+      type:   z.enum(["ltr", "otr", "all"]).catch("all"),
+      userId: z.coerce.number().int().positive().optional(),
+    }).parse(req.query);
+
+    const offset = (page - 1) * limit;
+
+    const [ltrRentals, otrRentals] = await Promise.all([
+      type !== "otr"
+        ? db.query.LongTermRentsModel.findMany({
+            where: userId ? (m, { eq }) => eq(m.userId, userId) : undefined,
+            orderBy: [desc(LongTermRentsModel.createdAt)],
+            with: {
+              // user info join — drizzle relations
+            },
+          })
+        : [],
+      type !== "ltr"
+        ? db.query.OneTimeRentModel.findMany({
+            where: userId ? (m, { eq }) => eq(m.userId, userId) : undefined,
+            orderBy: [desc(OneTimeRentModel.createdAt)],
+          })
+        : [],
+    ]);
+
+    // Username lookup batch
+    const userIds = [...new Set([
+      ...ltrRentals.map((r) => r.userId),
+      ...otrRentals.map((r) => r.userId),
+    ])];
+
+    const users = userIds.length
+      ? await db.query.UserModel.findMany({
+          where: (m, { inArray }) => inArray(m.id, userIds),
+          columns: { id: true, username: true, email: true },
+        })
+      : [];
+
+    const userMap = Object.fromEntries(users.map((u) => [u.id, u]));
+
+    const merged = [
+      ...ltrRentals.map((r) => ({
+        ...r,
+        rentKind: "ltr" as const,
+        user: userMap[r.userId] || null,
+      })),
+      ...otrRentals.map((r) => ({
+        ...r,
+        rentKind: "otr" as const,
+        user: userMap[r.userId] || null,
+      })),
+    ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const total = merged.length;
+    const paginated = merged.slice(offset, offset + limit);
+
+    res.json({
+      success: true,
+      rentals: paginated,
+      total,
+      totalPage: Math.ceil(total / limit),
+    });
+  } catch {
+    res.status(500).json({ success: false, message: "Internal server error." });
+  }
+}

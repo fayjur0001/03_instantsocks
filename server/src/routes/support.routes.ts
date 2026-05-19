@@ -1,0 +1,16 @@
+import { Router } from "express";
+import { getMyTickets, getOtherTickets, getUnclaimedTickets, getTicket, createTicket, sendMessage, getMessages, closeTicket, reopenTicket, claimTicket } from "@/controllers/support.controller";
+import { requireAuth } from "@/middleware/auth.middleware";
+const router = Router();
+router.use(requireAuth());
+router.get("/my-tickets", getMyTickets);
+router.get("/other-tickets", getOtherTickets);
+router.get("/unclaimed", getUnclaimedTickets);
+router.get("/:ticketId", getTicket);
+router.post("/", createTicket);
+router.get("/:ticketId/messages", getMessages);
+router.post("/:ticketId/messages", sendMessage);
+router.patch("/:ticketId/close", closeTicket);
+router.patch("/:ticketId/reopen", reopenTicket);
+router.patch("/:ticketId/claim", claimTicket);
+export default router;
